@@ -1,11 +1,14 @@
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
+import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipOutputStream;
+import java.io.InputStreamReader;
+import java.io.PrintWriter;
+import java.util.List;
+import java.util.Map.Entry;
+
+import org.im4java.core.ConvertCmd;
+import org.im4java.core.IMOperation;
 
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.auth.AWSCredentials;
@@ -14,25 +17,23 @@ import com.amazonaws.regions.Region;
 import com.amazonaws.regions.Regions;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3Client;
+import com.amazonaws.services.s3.model.AmazonS3Exception;
 import com.amazonaws.services.s3.model.GetObjectRequest;
-import com.amazonaws.services.s3.model.ListObjectsRequest;
-import com.amazonaws.services.s3.model.ObjectListing;
+import com.amazonaws.services.s3.model.PutObjectRequest;
 import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.s3.model.S3ObjectInputStream;
-import com.amazonaws.services.s3.model.S3ObjectSummary;
+import com.amazonaws.services.sqs.AmazonSQS;
+import com.amazonaws.services.sqs.AmazonSQSClient;
+import com.amazonaws.services.sqs.model.DeleteMessageRequest;
+import com.amazonaws.services.sqs.model.Message;
+import com.amazonaws.services.sqs.model.ReceiveMessageRequest;
 
 
 public class Main {
-	
-	static final int BUFFER = 2048;
-    static byte data[] = new byte[BUFFER];
 
 	public static void main(String[] args) {
-		
-		String bucketName = "oknowitworks";
-		String folder_events = "events";
-		String folder_eventhash = "753a03de62db0227df0a9969225299c2";
-		
+
+		// Get the credentials
 		AWSCredentials credentials = null;
         try {
             credentials = new ProfileCredentialsProvider("default").getCredentials();
@@ -43,48 +44,82 @@ public class Main {
                     "location (/home/thomas/.aws/credentials), and is in valid format.",
                     e);
         }
-		
-		AmazonS3 s3 = new AmazonS3Client(credentials);
+        
+        // Create new SQS object with region
+        AmazonSQS sqs = new AmazonSQSClient(credentials);
         Region usWest2 = Region.getRegion(Regions.US_WEST_2);
+        sqs.setRegion(usWest2);
+        
+        // Create new S3 object with region
+        AmazonS3 s3 = new AmazonS3Client(credentials);
         s3.setRegion(usWest2);
         
-        ObjectListing objectListing = s3.listObjects(new ListObjectsRequest()
-        .withBucketName(bucketName)
-        .withPrefix(folder_events+"/"+folder_eventhash));
+        String queueUrl = "https://sqs.us-west-2.amazonaws.com/153270437974/queue-cloud";
+        String bucketName = "oknowitworks";
         
-        File zipfile = new File(folder_eventhash + ".zip");
-        
-        try {
-			ZipOutputStream zos = new ZipOutputStream(new BufferedOutputStream(new FileOutputStream(zipfile)));
-	        for (S3ObjectSummary objectSummary : objectListing.getObjectSummaries()) {
-        		String key = objectSummary.getKey();
-        		S3Object object = s3.getObject(new GetObjectRequest(bucketName, key));
-        		S3ObjectInputStream is = object.getObjectContent();
+        System.out.println("Receiving messages from MyQueue.\n");
+        ReceiveMessageRequest receiveMessageRequest = new ReceiveMessageRequest(queueUrl);
+        while(true) {
+        	List<Message> messages = sqs.receiveMessage(receiveMessageRequest).getMessages();
+        	for (Message message : messages) {
         		
-        		BufferedInputStream bis = new BufferedInputStream(is, BUFFER);
+        		String body = message.getBody();
+        		String bodySplitted[] = body.split(":");
         		
-        		String name = key.split("/")[2];
-        		ZipEntry zep = new ZipEntry(name);
-        		zos.putNextEntry(zep);
+        		System.out.println(bodySplitted[1]);
         		
-        		int count;
-        		while((count = bis.read(data, 0, BUFFER)) != -1) {
-        			zos.write(data, 0, count);
+        		try {
+        			
+        			S3Object object = s3.getObject(new GetObjectRequest(bucketName, bodySplitted[1]));
+        			writeToFile(object.getObjectContent(), "/var/tmp/"+bodySplitted[1]);
+        			
+        		} catch (IOException e) {
+        			System.err.println(e.getMessage());
+        			continue;
+        		} catch (AmazonS3Exception e) {
+        			continue;
         		}
-        		zos.closeEntry();
+            
+        		/* This block of code resize an image */
+        		ConvertCmd cmd = new ConvertCmd();
+        		IMOperation op = new IMOperation();
+        		op.addImage(bodySplitted[1]);
+        		op.resize(800, 600, '>');
+        		op.addImage("/var/tmp/resized-"+bodySplitted[1]);
+        		try {
+        			cmd.run(op);
+        		} catch (Exception e) {
+        			System.err.println(e.getMessage());
+        		}
+        		/* End of resizing */
         		
-        		bis.close();	
-	        }
-	        zos.close();
-			
-		} catch (FileNotFoundException e) {
-			System.err.println(e.getMessage());
-		} catch (IOException e) {
-			System.err.println(e.getMessage());
+        		File newImage = new File("/var/tmp/resized-"+bodySplitted[1]);
+        		File oldImage = new File("/var/tmp/"+bodySplitted[1]);
+        		
+        		System.out.println("Putting image as: events/" + bodySplitted[0]+"/"+bodySplitted[1]);
+        		s3.putObject(new PutObjectRequest(bucketName, "events/"+bodySplitted[0]+"/"+bodySplitted[1], newImage));
+        		
+        		newImage.delete();
+        		oldImage.delete();
+        		
+        		String s = message.getReceiptHandle();
+        		sqs.deleteMessage(new DeleteMessageRequest(queueUrl, s));
+        		
+        		s3.deleteObject(bucketName, bodySplitted[1]);
+        		
+        		System.out.println("proccessed");
+        	}
+        }
+		
+	}
+	
+	private static void writeToFile(S3ObjectInputStream stream, String name) throws IOException {
+		FileOutputStream fos = new FileOutputStream(name);
+		while (true) {
+			int str = stream.read();
+			if(str == -1) break;
+			fos.write(str);
 		}
-        
-        s3.putObject(bucketName, folder_events+"/"+folder_eventhash+"/"+folder_eventhash+".zip", zipfile);
-        zipfile.delete();
 	}
 
 }
