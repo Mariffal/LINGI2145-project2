@@ -17,7 +17,6 @@ import com.amazonaws.regions.Region;
 import com.amazonaws.regions.Regions;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3Client;
-import com.amazonaws.services.s3.model.AmazonS3Exception;
 import com.amazonaws.services.s3.model.GetObjectRequest;
 import com.amazonaws.services.s3.model.PutObjectRequest;
 import com.amazonaws.services.s3.model.S3Object;
@@ -54,8 +53,8 @@ public class Main {
         AmazonS3 s3 = new AmazonS3Client(credentials);
         s3.setRegion(usWest2);
         
-        String queueUrl = "https://sqs.us-west-2.amazonaws.com/153270437974/queue-cloud";
-        String bucketName = "oknowitworks";
+        String queueUrl = "https://sqs.us-west-2.amazonaws.com/829489956151/bclassep2";
+        String bucketName = "bclassep2";
         
         System.out.println("Receiving messages from MyQueue.\n");
         ReceiveMessageRequest receiveMessageRequest = new ReceiveMessageRequest(queueUrl);
@@ -67,23 +66,19 @@ public class Main {
         		String bodySplitted[] = body.split(":");
         		
         		System.out.println(bodySplitted[1]);
+        		S3Object object = s3.getObject(new GetObjectRequest(bucketName, bodySplitted[1]));
         		
         		try {
-        			
-        			S3Object object = s3.getObject(new GetObjectRequest(bucketName, bodySplitted[1]));
         			writeToFile(object.getObjectContent(), "/var/tmp/"+bodySplitted[1]);
-        			
         		} catch (IOException e) {
         			System.err.println(e.getMessage());
-        			continue;
-        		} catch (AmazonS3Exception e) {
         			continue;
         		}
             
         		/* This block of code resize an image */
         		ConvertCmd cmd = new ConvertCmd();
         		IMOperation op = new IMOperation();
-        		op.addImage(bodySplitted[1]);
+        		op.addImage("/var/tmp/"+bodySplitted[1]);
         		op.resize(800, 600, '>');
         		op.addImage("/var/tmp/resized-"+bodySplitted[1]);
         		try {
@@ -123,3 +118,4 @@ public class Main {
 	}
 
 }
+
