@@ -108,7 +108,7 @@ public class LambdaFunctionHandler implements RequestHandler<S3Event, Object> {
 
 			AccessControlList acl = new AccessControlList();
 			acl.grantPermission(GroupGrantee.AllUsers, Permission.Read);
-			s3.putObject(new PutObjectRequest(bucketName, folder_events+"/"+folder_eventhash+"/"+folder_eventhash+".zip", zipfile).withAccessControlList(acl));
+			s3.putObject(new PutObjectRequest(bucketName, "events/zips/"+folder_eventhash+".zip", zipfile).withAccessControlList(acl));
 			zipfile.delete();
 		}
 
